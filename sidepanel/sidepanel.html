@@ -94,6 +94,13 @@
           <input type="text" id="crawl-path-prefix" placeholder="e.g. /app (leave blank to crawl entire product)">
         </div>
 
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="crawl-allow-subdomains" checked>
+            <span>Allow app subdomains (e.g. *.domain.com)</span>
+          </label>
+        </div>
+
         <div class="crawl-status-box" id="crawl-status-box">
           <span class="crawl-status-indicator" id="crawl-status-indicator"></span>
           <span class="crawl-status-text" id="crawl-status-text">Ready to crawl current domain</span>
@@ -102,6 +109,17 @@
         <div class="crawl-btn-row">
           <button class="btn btn-primary" id="btn-start-crawl">Start Crawl</button>
           <button class="btn btn-danger" id="btn-stop-crawl" disabled>Stop</button>
+        </div>
+
+        <!-- Live Activity Log -->
+        <div class="crawl-log-container">
+          <div class="crawl-log-header">
+            <span>Crawl Activity Log</span>
+            <button class="btn-text" id="btn-clear-crawl-log">Clear Log</button>
+          </div>
+          <div class="crawl-log-list" id="crawl-log-list">
+            <div class="crawl-log-empty">Activity logs will appear here during auto-crawl...</div>
+          </div>
         </div>
       </div>
     </section>

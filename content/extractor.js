@@ -215,10 +215,26 @@
   }
 
   /**
+   * Helper to determine if target hostname belongs to the same domain or subdomain
+   */
+  function isSameOrSubdomain(targetHostname, currentHostname) {
+    if (targetHostname === currentHostname) return true;
+    const tParts = targetHostname.split('.');
+    const cParts = currentHostname.split('.');
+    if (tParts.length >= 2 && cParts.length >= 2) {
+      const tBase = tParts.slice(-2).join('.');
+      const cBase = cParts.slice(-2).join('.');
+      return tBase === cBase;
+    }
+    return false;
+  }
+
+  /**
    * Extract discoverable internal links for crawler
    */
   function extractCrawlerLinks() {
     const currentOrigin = window.location.origin;
+    const currentHostname = window.location.hostname;
     const currentHref = window.location.href.replace(/\/+$/, '');
     const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
     const currentHash = window.location.hash;
@@ -226,19 +242,20 @@
     const links = [];
     const destructiveKeywords = ['delete', 'remove', 'logout', 'log out', 'sign out', 'disconnect', 'cancel subscription', 'terminate'];
 
-    // Select standard anchors and interactive elements with route attributes
-    const elements = document.querySelectorAll('a[href], [data-href], [data-route], [data-url], [role="link"]');
+    // Select all potential navigational elements across the entire document
+    // NOTE: We intentionally do NOT filter by isVisible here, because menus, dropdowns,
+    // collapsed sidebars, and tab panes often have display:none or 0x0 rects until interacted with!
+    const elements = document.querySelectorAll('a[href], [data-href], [data-route], [data-url], [role="link"], [role="tab"][href], [role="menuitem"][href]');
 
     elements.forEach(el => {
-      if (!isVisible(el)) return;
       try {
         let rawHref = el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-route') || el.getAttribute('data-url');
         if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
 
         const url = new URL(rawHref, window.location.href);
 
-        // Enforce same origin (stay within the current domain)
-        if (url.origin !== currentOrigin) return;
+        // Enforce same domain or product subdomain
+        if (!isSameOrSubdomain(url.hostname, currentHostname)) return;
 
         // Skip exact duplicate of the current page
         const cleanUrlHref = url.href.replace(/\/+$/, '');

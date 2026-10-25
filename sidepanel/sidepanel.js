@@ -36,8 +36,11 @@ const dom = {
   crawlMaxScreens: document.getElementById('crawl-max-screens'),
   crawlDelay: document.getElementById('crawl-delay'),
   crawlPathPrefix: document.getElementById('crawl-path-prefix'),
+  crawlAllowSubdomains: document.getElementById('crawl-allow-subdomains'),
   crawlStatusBox: document.getElementById('crawl-status-box'),
   crawlStatusText: document.getElementById('crawl-status-text'),
+  crawlLogList: document.getElementById('crawl-log-list'),
+  btnClearCrawlLog: document.getElementById('btn-clear-crawl-log'),
   settingScale: document.getElementById('setting-scale'),
   settingFormat: document.getElementById('setting-format'),
   settingFullPage: document.getElementById('setting-full-page'),
@@ -322,6 +325,30 @@ dom.btnClearSession.addEventListener('click', () => {
 });
 
 /**
+ * Diagnostic logger for Auto-Crawl
+ */
+function addCrawlLog(msg, type = 'info') {
+  if (!dom.crawlLogList) return;
+  const empty = dom.crawlLogList.querySelector('.crawl-log-empty');
+  if (empty) empty.remove();
+
+  const time = new Date().toTimeString().split(' ')[0];
+  const entry = document.createElement('div');
+  entry.className = `crawl-log-entry ${type}`;
+  entry.textContent = `[${time}] ${msg}`;
+  dom.crawlLogList.appendChild(entry);
+  dom.crawlLogList.scrollTop = dom.crawlLogList.scrollHeight;
+}
+
+if (dom.btnClearCrawlLog) {
+  dom.btnClearCrawlLog.addEventListener('click', () => {
+    if (dom.crawlLogList) {
+      dom.crawlLogList.innerHTML = '<div class="crawl-log-empty">Logs cleared.</div>';
+    }
+  });
+}
+
+/**
  * Auto-Crawl Engine
  */
 async function runAutoCrawl() {
@@ -335,6 +362,7 @@ async function runAutoCrawl() {
   const maxScreens = parseInt(dom.crawlMaxScreens.value, 10) || 15;
   const delaySec = parseInt(dom.crawlDelay.value, 10) || 2;
   const customPrefix = (dom.crawlPathPrefix.value || '').trim();
+  const allowSubdomains = dom.crawlAllowSubdomains ? dom.crawlAllowSubdomains.checked : true;
 
   try {
     const [initialTab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -346,7 +374,15 @@ async function runAutoCrawl() {
     const isAllowedTarget = (targetUrl) => {
       try {
         const u = new URL(targetUrl);
-        if (u.origin !== initialUrl.origin) return false;
+        if (allowSubdomains) {
+          const tParts = u.hostname.split('.');
+          const iParts = initialUrl.hostname.split('.');
+          const tBase = tParts.slice(-2).join('.');
+          const iBase = iParts.slice(-2).join('.');
+          if (tBase !== iBase) return false;
+        } else {
+          if (u.origin !== initialUrl.origin) return false;
+        }
         if (customPrefix && !u.pathname.startsWith(customPrefix)) return false;
         return true;
       } catch (_) {
@@ -354,6 +390,7 @@ async function runAutoCrawl() {
       }
     };
 
+    addCrawlLog(`Starting crawl on ${initialUrl.hostname}...`, 'info');
     dom.crawlStatusText.textContent = 'Capturing starting screen...';
 
     // 1. Capture current starting screen
@@ -362,24 +399,35 @@ async function runAutoCrawl() {
       throw new Error(firstResult.error || 'Failed to capture starting screen.');
     }
 
+    addCrawlLog(`Screen #1 captured (${firstResult.stepRecord.title || 'Start'}).`, 'success');
+
     // 2. Discover and queue internal links
     const rawLinks = firstResult.contextData.crawlerLinks || [];
     let queue = rawLinks
       .filter(l => !state.visitedUrls.has(normalizeUrl(l.url)))
       .filter(l => isAllowedTarget(l.url));
 
-    console.log(`[ScreenGrabber] Starting screen has ${rawLinks.length} links; ${queue.length} match domain criteria.`);
+    addCrawlLog(`Discovered ${rawLinks.length} links on starting screen (${queue.length} new queued).`, 'info');
     dom.crawlStatusText.textContent = `Found ${queue.length} links queued. Crawling...`;
+
+    if (queue.length === 0) {
+      addCrawlLog('No additional unvisited internal links found on starting page.', 'warn');
+    }
 
     // 3. Sequential crawling loop
     while (state.isCrawling && queue.length > 0 && state.manifest.steps.length < maxScreens) {
       const nextTarget = queue.shift();
       const normTargetUrl = normalizeUrl(nextTarget.url);
 
-      if (state.visitedUrls.has(normTargetUrl)) continue;
+      if (state.visitedUrls.has(normTargetUrl)) {
+        addCrawlLog(`Skipping ${nextTarget.label || normTargetUrl} (already captured).`, 'info');
+        continue;
+      }
 
-      const progressMsg = `[Screen ${state.manifest.steps.length + 1}/${maxScreens}] ${nextTarget.label}`;
+      const screenNum = state.manifest.steps.length + 1;
+      const progressMsg = `[Screen ${screenNum}/${maxScreens}] ${nextTarget.label}`;
       dom.crawlStatusText.textContent = `Navigating: ${nextTarget.label}... (${queue.length} left)`;
+      addCrawlLog(`Navigating to #${screenNum}: ${nextTarget.label || nextTarget.pathname}`, 'info');
       showToast(progressMsg);
 
       // Navigate tab to target URL
@@ -389,36 +437,50 @@ async function runAutoCrawl() {
         url: nextTarget.url
       });
 
-      // Allow SPA transitions and dynamic renders to settle
+      // Allow dynamic renders & hydration to settle
       await new Promise(r => setTimeout(r, (delaySec * 1000) + 700));
 
       // Capture newly loaded screen
       const captureRes = await performCapture(slugify(nextTarget.label), initialTab.id);
       if (captureRes.success && captureRes.contextData) {
+        addCrawlLog(`Screen #${screenNum} captured successfully.`, 'success');
+
         // Enqueue newly discovered links on this new page
         const newDiscovered = (captureRes.contextData.crawlerLinks || [])
           .filter(l => !state.visitedUrls.has(normalizeUrl(l.url)))
           .filter(l => isAllowedTarget(l.url));
 
-        // Deduplicate against existing queue
+        let addedCount = 0;
         newDiscovered.forEach(newLink => {
           const norm = normalizeUrl(newLink.url);
           if (!queue.some(q => normalizeUrl(q.url) === norm)) {
             queue.push(newLink);
+            addedCount++;
           }
         });
 
+        if (addedCount > 0) {
+          addCrawlLog(`Found ${addedCount} new unvisited links on this screen. (Queue: ${queue.length})`, 'info');
+        }
+
         dom.crawlStatusText.textContent = `Saved ${state.manifest.steps.length} screens. (${queue.length} in queue)`;
       } else {
-        console.warn(`[ScreenGrabber] Could not capture ${nextTarget.url}:`, captureRes.error);
+        addCrawlLog(`Failed capturing ${nextTarget.url}: ${captureRes.error}`, 'error');
       }
     }
 
     const finalCount = state.manifest.steps.length;
+    if (queue.length === 0) {
+      addCrawlLog(`Queue empty. All discoverable links visited (${finalCount} screens total).`, 'success');
+    } else if (finalCount >= maxScreens) {
+      addCrawlLog(`Reached maximum screen limit (${maxScreens}).`, 'info');
+    }
+
     dom.crawlStatusText.textContent = `Crawl complete. Captured ${finalCount} screens.`;
     showToast(`Crawl finished: ${finalCount} screens captured.`);
   } catch (err) {
     console.error('Crawl Error:', err);
+    addCrawlLog(`Fatal error: ${err.message}`, 'error');
     dom.crawlStatusText.textContent = `Crawl halted: ${err.message}`;
     showToast(`Crawl error: ${err.message}`);
   } finally {

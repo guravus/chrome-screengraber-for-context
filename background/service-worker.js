@@ -27,6 +27,11 @@ async function captureHighResScreenshot(tabId, options = {}) {
 
   const target = { tabId };
 
+  // Ensure any previous or dangling debugger connection on this tab is cleanly released
+  try {
+    await chrome.debugger.detach(target);
+  } catch (_) {}
+
   try {
     // 1. Attach debugger to target tab
     await chrome.debugger.attach(target, '1.3');
@@ -96,7 +101,7 @@ async function captureHighResScreenshot(tabId, options = {}) {
 
     // Fallback to standard tab capture if debugger fails (e.g. restricted page)
     try {
-      const fallbackDataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+      const fallbackDataUrl = await chrome.tabs.captureVisibleTab({ format: 'png' });
       return {
         success: true,
         dataUrl: fallbackDataUrl,
@@ -106,7 +111,7 @@ async function captureHighResScreenshot(tabId, options = {}) {
     } catch (fallbackError) {
       return {
         success: false,
-        error: error.message || 'Screenshot capture failed'
+        error: error.message || fallbackError.message || 'Screenshot capture failed'
       };
     }
   }
