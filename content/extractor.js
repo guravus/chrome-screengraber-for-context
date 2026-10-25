@@ -230,10 +230,73 @@
   }
 
   /**
+   * Normalizes path string from Angular routerLink, React to, or data attributes
+   */
+  function extractPathFromAttribute(val) {
+    if (!val || typeof val !== 'string') return null;
+    let cleaned = val.trim();
+    if (cleaned === '#' || cleaned.startsWith('javascript:')) return null;
+
+    // Handle Angular array syntax, e.g. ['/people'] or ['time-off'] or ['/employee', id]
+    if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+      cleaned = cleaned.slice(1, -1)
+        .replace(/['"]/g, '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .join('/');
+    }
+
+    cleaned = cleaned.trim();
+    if (!cleaned) return null;
+
+    // Direct path or hash
+    if (cleaned.startsWith('/') || cleaned.startsWith('#') || cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
+      return cleaned;
+    }
+
+    // Relative slug, e.g. "people", "time-off", "payroll"
+    if (/^[a-zA-Z0-9_\-\/]+$/.test(cleaned) && !cleaned.includes(' ') && cleaned.length > 1 && cleaned.length < 80) {
+      return `/${cleaned.replace(/^\/+/, '')}`;
+    }
+
+    return null;
+  }
+
+  /**
+   * Recursively gathers all elements in the page, piercing open Shadow DOM trees
+   */
+  function collectAllElementsDeep(root = document) {
+    const elements = [];
+    const stack = [root];
+    let shadowCount = 0;
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+
+      if (current.shadowRoot) {
+        shadowCount++;
+        stack.push(current.shadowRoot);
+      }
+
+      if (current.nodeType === Node.ELEMENT_NODE) {
+        elements.push(current);
+      }
+
+      const children = current.children || [];
+      for (let i = children.length - 1; i >= 0; i--) {
+        stack.push(children[i]);
+      }
+    }
+
+    return { elements, shadowCount };
+  }
+
+  /**
    * Extract discoverable internal links for crawler
    */
   function extractCrawlerLinks() {
-    const currentOrigin = window.location.origin;
     const currentHostname = window.location.hostname;
     const currentHref = window.location.href.replace(/\/+$/, '');
     const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
@@ -242,17 +305,60 @@
     const links = [];
     const destructiveKeywords = ['delete', 'remove', 'logout', 'log out', 'sign out', 'disconnect', 'cancel subscription', 'terminate'];
 
-    // Select all potential navigational elements across the entire document
-    // NOTE: We intentionally do NOT filter by isVisible here, because menus, dropdowns,
-    // collapsed sidebars, and tab panes often have display:none or 0x0 rects until interacted with!
-    const elements = document.querySelectorAll('a[href], [data-href], [data-route], [data-url], [role="link"], [role="tab"][href], [role="menuitem"][href]');
+    // Traverse all DOM elements including inside Shadow Roots
+    const { elements } = collectAllElementsDeep(document);
+
+    // List of attributes commonly holding router destinations
+    const ROUTE_ATTRIBUTES = [
+      'href',
+      'ng-reflect-router-link',
+      'routerlink',
+      'router-link',
+      'to',
+      'data-href',
+      'data-route',
+      'data-path',
+      'data-url',
+      'data-nav',
+      'data-target',
+      'data-link'
+    ];
 
     elements.forEach(el => {
       try {
-        let rawHref = el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-route') || el.getAttribute('data-url');
-        if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
+        let rawDest = null;
+        for (const attr of ROUTE_ATTRIBUTES) {
+          const val = el.getAttribute(attr);
+          if (val) {
+            const parsed = extractPathFromAttribute(val);
+            if (parsed) {
+              rawDest = parsed;
+              break;
+            }
+          }
+        }
 
-        const url = new URL(rawHref, window.location.href);
+        // If no explicit route attribute, check if element is a menuitem or nav item with a route in any attribute
+        if (!rawDest) {
+          const role = el.getAttribute('role');
+          const isNavItem = role === 'menuitem' || role === 'tab' || role === 'link' || el.tagName === 'A';
+          if (isNavItem) {
+            for (let i = 0; i < el.attributes.length; i++) {
+              const attr = el.attributes[i];
+              if (attr.value && (attr.value.startsWith('/') || attr.value.startsWith('#/'))) {
+                const parsed = extractPathFromAttribute(attr.value);
+                if (parsed) {
+                  rawDest = parsed;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        if (!rawDest) return;
+
+        const url = new URL(rawDest, window.location.href);
 
         // Enforce same domain or product subdomain
         if (!isSameOrSubdomain(url.hostname, currentHostname)) return;
@@ -270,7 +376,7 @@
           }
         }
 
-        const label = cleanText(el.innerText || el.getAttribute('aria-label') || el.title);
+        const label = cleanText(el.innerText || el.getAttribute('aria-label') || el.title || el.getAttribute('data-qa') || el.getAttribute('data-bob-qa'));
         const lowerLabel = label.toLowerCase();
         const lowerPath = url.pathname.toLowerCase();
 
@@ -408,6 +514,20 @@
       _restoreHook: () => {
         if (restoreVisuals) restoreVisuals();
       }
+    };
+  };
+
+  // Expose live diagnostic inspector for live testing
+  window.__SCREEN_GRABBER_DIAGNOSE_LINKS__ = function() {
+    const { elements, shadowCount } = collectAllElementsDeep(document);
+    const crawlerLinks = extractCrawlerLinks();
+    return {
+      url: window.location.href,
+      hostname: window.location.hostname,
+      totalElements: elements.length,
+      shadowRootsCount: shadowCount,
+      crawlerLinksCount: crawlerLinks.length,
+      crawlerLinks: crawlerLinks
     };
   };
 

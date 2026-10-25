@@ -24,6 +24,34 @@ function sanitizePIIText(text) {
     .replace(PII_PATTERNS.ssn, '[REDACTED_SSN]');
 }
 
+function extractPathFromAttribute(val) {
+  if (!val || typeof val !== 'string') return null;
+  let cleaned = val.trim();
+  if (cleaned === '#' || cleaned.startsWith('javascript:')) return null;
+
+  if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+    cleaned = cleaned.slice(1, -1)
+      .replace(/['"]/g, '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join('/');
+  }
+
+  cleaned = cleaned.trim();
+  if (!cleaned) return null;
+
+  if (cleaned.startsWith('/') || cleaned.startsWith('#') || cleaned.startsWith('http://') || cleaned.startsWith('https://')) {
+    return cleaned;
+  }
+
+  if (/^[a-zA-Z0-9_\-\/]+$/.test(cleaned) && !cleaned.includes(' ') && cleaned.length > 1 && cleaned.length < 80) {
+    return `/${cleaned.replace(/^\/+/, '')}`;
+  }
+
+  return null;
+}
+
 test('Heading Extraction properly captures levels and text', () => {
   const headings = [
     { level: 1, text: 'Product Dashboard' },
@@ -64,6 +92,22 @@ test('Safe crawler link extraction excludes destructive keywords', () => {
   assert.equal(filtered.length, 2);
   assert.equal(filtered[0].label, 'Projects');
   assert.equal(filtered[1].label, 'Analytics');
+});
+
+test('Angular routerLink and React to attribute path resolution', () => {
+  // Angular syntax: ng-reflect-router-link="['/people']"
+  assert.equal(extractPathFromAttribute("['/people']"), '/people');
+  // Angular syntax: ng-reflect-router-link="time-off"
+  assert.equal(extractPathFromAttribute('time-off'), '/time-off');
+  // Angular syntax: routerlink="/payroll/summary"
+  assert.equal(extractPathFromAttribute('/payroll/summary'), '/payroll/summary');
+  // React syntax: to="/company/directory"
+  assert.equal(extractPathFromAttribute('/company/directory'), '/company/directory');
+  // In-page hash route: href="#/settings"
+  assert.equal(extractPathFromAttribute('#/settings'), '#/settings');
+  // Ignored generic hash or javascript:
+  assert.equal(extractPathFromAttribute('#'), null);
+  assert.equal(extractPathFromAttribute('javascript:void(0)'), null);
 });
 
 test('Markdown documentation generation formats context cleanly for LLM agents', () => {

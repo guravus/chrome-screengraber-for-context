@@ -32,6 +32,7 @@ const dom = {
   btnCaptureNow: document.getElementById('btn-capture-now'),
   stepCustomName: document.getElementById('step-custom-name'),
   btnStartCrawl: document.getElementById('btn-start-crawl'),
+  btnInspectPage: document.getElementById('btn-inspect-page'),
   btnStopCrawl: document.getElementById('btn-stop-crawl'),
   crawlMaxScreens: document.getElementById('crawl-max-screens'),
   crawlDelay: document.getElementById('crawl-delay'),
@@ -497,3 +498,41 @@ dom.btnStopCrawl.addEventListener('click', () => {
   state.isCrawling = false;
   showToast('Stopping crawl after current step...');
 });
+
+if (dom.btnInspectPage) {
+  dom.btnInspectPage.addEventListener('click', async () => {
+    try {
+      addCrawlLog('Inspecting active page for discoverable links...', 'info');
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) throw new Error('No active tab found.');
+
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content/extractor.js']
+      });
+
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => window.__SCREEN_GRABBER_DIAGNOSE_LINKS__()
+      });
+
+      const diag = res.result;
+      addCrawlLog(`Scanned ${diag.totalElements} elements across page (${diag.shadowRootsCount} Shadow Roots pierced).`, 'info');
+      addCrawlLog(`Found ${diag.crawlerLinksCount} internal router & navigation links on ${diag.hostname}:`, diag.crawlerLinksCount > 0 ? 'success' : 'warn');
+
+      if (diag.crawlerLinksCount > 0) {
+        diag.crawlerLinks.slice(0, 15).forEach((link, idx) => {
+          addCrawlLog(`  ${idx + 1}. [${link.label}] -> ${link.pathname}`, 'info');
+        });
+        if (diag.crawlerLinksCount > 15) {
+          addCrawlLog(`  ...and ${diag.crawlerLinksCount - 15} more links`, 'info');
+        }
+      } else {
+        addCrawlLog('No links found. Check if page has finished loading or if links require clicking to reveal.', 'warn');
+      }
+    } catch (err) {
+      console.error('Inspect Error:', err);
+      addCrawlLog(`Inspect failed: ${err.message}`, 'error');
+    }
+  });
+}
