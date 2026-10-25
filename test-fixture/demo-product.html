@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nexus Cloud - Analytics & Overview</title>
+  <style>
+    :root {
+      --primary: #6366f1;
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: #334155;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      min-height: 100vh;
+    }
+    nav.sidebar {
+      width: 240px;
+      background: #111827;
+      border-right: 1px solid var(--border);
+      padding: 24px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .logo {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .nav-links {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .nav-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    .nav-link.active, .nav-link:hover {
+      background: rgba(99, 102, 241, 0.1);
+      color: var(--primary);
+    }
+    main.content {
+      flex: 1;
+      padding: 32px 40px;
+      max-width: 1200px;
+    }
+    header.page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 700;
+    }
+    .btn-group {
+      display: flex;
+      gap: 12px;
+    }
+    button {
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+    }
+    button.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+    .metric-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .metric-title {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .metric-val {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .data-table-container {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    h2 {
+      margin: 0 0 16px 0;
+      font-size: 18px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <nav class="sidebar" role="navigation">
+    <div class="logo">⚡ Nexus Cloud</div>
+    <div class="nav-links">
+      <a href="demo-product.html" class="nav-link active">Dashboard</a>
+      <a href="demo-deployments.html" class="nav-link">Deployments</a>
+      <a href="demo-settings.html" class="nav-link">Settings</a>
+      <a href="/logout" class="nav-link">Sign Out</a>
+    </div>
+  </nav>
+
+  <main class="content">
+    <header class="page-header">
+      <div>
+        <h1>Analytics & Overview</h1>
+        <p style="color: var(--text-muted); margin: 4px 0 0 0;">Real-time health and usage statistics for production workloads</p>
+      </div>
+      <div class="btn-group">
+        <button>Export CSV</button>
+        <button class="primary">Deploy New Service</button>
+      </div>
+    </header>
+
+    <section class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-title">Total API Requests</div>
+        <div class="metric-val">14.8M</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Average Latency</div>
+        <div class="metric-val">38ms</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Uptime (30d)</div>
+        <div class="metric-val">99.98%</div>
+      </div>
+    </section>
+
+    <section class="data-table-container">
+      <h2>Active Microservices</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Service Name</th>
+            <th>Status</th>
+            <th>Instances</th>
+            <th>Region</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>auth-gateway</td>
+            <td><span style="color: #10b981;">● Healthy</span></td>
+            <td>4</td>
+            <td>us-east-1</td>
+            <td><button style="padding: 4px 8px; font-size: 12px;">Logs</button></td>
+          </tr>
+          <tr>
+            <td>billing-worker</td>
+            <td><span style="color: #10b981;">● Healthy</span></td>
+            <td>2</td>
+            <td>us-east-1</td>
+            <td><button style="padding: 4px 8px; font-size: 12px;">Logs</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

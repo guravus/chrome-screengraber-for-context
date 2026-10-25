@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScreenGrabber for Context</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+        </div>
+        <div>
+          <h1 class="brand-title">ScreenGrabber</h1>
+          <span class="brand-subtitle">AI Agent Context Capture</span>
+        </div>
+      </div>
+      <div class="status-badge" id="connection-status">Ready</div>
+    </header>
+
+    <!-- Folder Selection Card -->
+    <section class="card folder-card">
+      <div class="card-title-row">
+        <span class="card-label">Output Directory</span>
+        <span class="mode-pill" id="storage-mode-pill">Not Selected</span>
+      </div>
+      <div class="folder-path-display" id="folder-path-text">
+        Click below to select a local folder on your disk.
+      </div>
+      <button class="btn btn-secondary w-full" id="btn-select-folder">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        </svg>
+        <span>Select Destination Folder</span>
+      </button>
+    </section>
+
+    <!-- Mode Selector Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="guided">Guided Capture</button>
+      <button class="tab-btn" data-tab="crawler">Auto-Crawl</button>
+    </div>
+
+    <!-- Guided Capture Panel -->
+    <section id="panel-guided" class="tab-content active">
+      <div class="action-card">
+        <p class="section-description">
+          Navigate your product normally. Whenever you reach a key screen or state, click below to capture it in high resolution.
+        </p>
+
+        <div class="input-group">
+          <label for="step-custom-name">Screen Name / Slug (Optional)</label>
+          <input type="text" id="step-custom-name" placeholder="e.g. dashboard, billing_invoices, edit_profile">
+        </div>
+
+        <button class="btn btn-primary w-full capture-btn" id="btn-capture-now">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <circle cx="12" cy="12" r="3" fill="currentColor"/>
+          </svg>
+          <span>Capture Current Screen</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Auto-Crawl Panel -->
+    <section id="panel-crawler" class="tab-content">
+      <div class="action-card">
+        <p class="section-description">
+          Discovers internal links within this domain and captures them sequentially. Destructive buttons and external paths are automatically bypassed.
+        </p>
+
+        <div class="crawl-config-grid">
+          <div class="input-group">
+            <label for="crawl-max-depth">Max Screens</label>
+            <input type="number" id="crawl-max-screens" value="15" min="1" max="50">
+          </div>
+          <div class="input-group">
+            <label for="crawl-delay">Delay per page (sec)</label>
+            <input type="number" id="crawl-delay" value="2" min="1" max="10">
+          </div>
+        </div>
+
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="crawl-stay-prefix" checked>
+            <span>Stay within current path prefix</span>
+          </label>
+        </div>
+
+        <div class="crawl-btn-row">
+          <button class="btn btn-primary" id="btn-start-crawl">Start Crawl</button>
+          <button class="btn btn-danger" id="btn-stop-crawl" disabled>Stop</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings Drawer / Options -->
+    <details class="settings-drawer">
+      <summary>Capture Quality & Settings</summary>
+      <div class="settings-content">
+        <div class="setting-item">
+          <label for="setting-scale">Resolution Scale (DPR)</label>
+          <select id="setting-scale">
+            <option value="1">1x Standard</option>
+            <option value="2" selected>2x High-Res (Retina)</option>
+            <option value="3">3x Ultra High-Res</option>
+          </select>
+        </div>
+        <div class="setting-item">
+          <label for="setting-format">Image Format</label>
+          <select id="setting-format">
+            <option value="png" selected>PNG (Lossless)</option>
+            <option value="jpeg">JPEG</option>
+          </select>
+        </div>
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" id="setting-full-page" checked>
+            <span>Capture Full Page (Scroll height)</span>
+          </label>
+        </div>
+        <div class="checkbox-group pii-toggle-group">
+          <label>
+            <input type="checkbox" id="setting-redact-pii" checked>
+            <span class="pii-label">🛡️ Auto-Redact PII (Blur in screenshot & sanitize text)</span>
+          </label>
+          <span class="pii-subtext">Automatically detects and masks emails, phones, credit cards, and API keys.</span>
+        </div>
+      </div>
+    </details>
+
+    <!-- Live Captured History / Feed -->
+    <section class="feed-section">
+      <div class="feed-header">
+        <h2>Captured Screens (<span id="captured-count">0</span>)</h2>
+        <button class="btn-text" id="btn-clear-session" title="Clear session history">Clear</button>
+      </div>
+
+      <div class="captured-list" id="captured-list">
+        <div class="empty-state" id="empty-state">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <p>No screens captured yet.<br>Click "Capture Current Screen" to start.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer Toast / Notification -->
+    <div class="toast hidden" id="toast"></div>
+  </div>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
