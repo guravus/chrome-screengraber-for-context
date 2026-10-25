@@ -517,8 +517,8 @@ if (dom.btnInspectPage) {
       });
 
       const diag = res.result;
-      addCrawlLog(`Scanned ${diag.totalElements} elements across page (${diag.shadowRootsCount} Shadow Roots pierced).`, 'info');
-      addCrawlLog(`Found ${diag.crawlerLinksCount} internal router & navigation links on ${diag.hostname}:`, diag.crawlerLinksCount > 0 ? 'success' : 'warn');
+      addCrawlLog(`Scanned ${diag.totalElements} elements across page (${diag.shadowRootsCount} Shadow Roots, ${diag.iframesCount} iframes).`, 'info');
+      addCrawlLog(`Discovered ${diag.crawlerLinksCount} router links on ${diag.hostname}:`, diag.crawlerLinksCount > 0 ? 'success' : 'warn');
 
       if (diag.crawlerLinksCount > 0) {
         diag.crawlerLinks.slice(0, 15).forEach((link, idx) => {
@@ -527,8 +527,18 @@ if (dom.btnInspectPage) {
         if (diag.crawlerLinksCount > 15) {
           addCrawlLog(`  ...and ${diag.crawlerLinksCount - 15} more links`, 'info');
         }
+      }
+
+      if (diag.navContainers && diag.navContainers.length > 0) {
+        diag.navContainers.forEach(c => {
+          addCrawlLog(`Found Nav Container: <${c.container}> with ${c.itemsCount} interactive items:`, 'info');
+          c.sampleItems.slice(0, 5).forEach(it => {
+            const attrSummary = Object.keys(it.attrs).map(k => `${k}="${it.attrs[k]}"`).join(' ');
+            addCrawlLog(`  • <${it.tag}> "${it.text}" [${attrSummary.substring(0, 80)}]`, 'info');
+          });
+        });
       } else {
-        addCrawlLog('No links found. Check if page has finished loading or if links require clicking to reveal.', 'warn');
+        addCrawlLog('No distinct nav/sidebar containers found. Elements may be rendered via custom elements.', 'warn');
       }
     } catch (err) {
       console.error('Inspect Error:', err);

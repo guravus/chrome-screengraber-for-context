@@ -264,33 +264,50 @@
   }
 
   /**
-   * Recursively gathers all elements in the page, piercing open Shadow DOM trees
+   * Recursively gathers all elements across the page, piercing open Shadow DOM trees and accessible iframes
    */
   function collectAllElementsDeep(root = document) {
     const elements = [];
-    const stack = [root];
+    const visitedRoots = new Set();
     let shadowCount = 0;
+    let iframeCount = 0;
 
-    while (stack.length > 0) {
-      const current = stack.pop();
-      if (!current) continue;
+    function scan(node) {
+      if (!node || visitedRoots.has(node)) return;
+      visitedRoots.add(node);
 
-      if (current.shadowRoot) {
-        shadowCount++;
-        stack.push(current.shadowRoot);
-      }
+      let nodeList = [];
+      try {
+        if (node.querySelectorAll) {
+          nodeList = Array.from(node.querySelectorAll('*'));
+        }
+      } catch (_) {}
 
-      if (current.nodeType === Node.ELEMENT_NODE) {
-        elements.push(current);
-      }
+      for (const el of nodeList) {
+        elements.push(el);
 
-      const children = current.children || [];
-      for (let i = children.length - 1; i >= 0; i--) {
-        stack.push(children[i]);
+        // Pierce open Shadow Roots
+        if (el.shadowRoot && !visitedRoots.has(el.shadowRoot)) {
+          shadowCount++;
+          scan(el.shadowRoot);
+        }
+
+        // Pierce accessible same-origin iframes
+        if (el.tagName === 'IFRAME') {
+          try {
+            if (el.contentDocument && !visitedRoots.has(el.contentDocument)) {
+              iframeCount++;
+              scan(el.contentDocument);
+            }
+          } catch (_) {
+            // Cross-origin iframe
+          }
+        }
       }
     }
 
-    return { elements, shadowCount };
+    scan(root);
+    return { elements, shadowCount, iframeCount };
   }
 
   /**
@@ -305,7 +322,7 @@
     const links = [];
     const destructiveKeywords = ['delete', 'remove', 'logout', 'log out', 'sign out', 'disconnect', 'cancel subscription', 'terminate'];
 
-    // Traverse all DOM elements including inside Shadow Roots
+    // Traverse all DOM elements including inside Shadow Roots & iframes
     const { elements } = collectAllElementsDeep(document);
 
     // List of attributes commonly holding router destinations
@@ -326,6 +343,11 @@
 
     elements.forEach(el => {
       try {
+        // Never treat stylesheets, scripts, or meta tags as links
+        if (el.tagName === 'LINK' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'META') {
+          return;
+        }
+
         let rawDest = null;
         for (const attr of ROUTE_ATTRIBUTES) {
           const val = el.getAttribute(attr);
@@ -367,6 +389,9 @@
         const cleanUrlHref = url.href.replace(/\/+$/, '');
         if (cleanUrlHref === currentHref) return;
 
+        // Skip root if already on root
+        if (url.pathname === '/' && currentPath === '/' && !url.hash && !currentHash) return;
+
         // Handle same pathname with hash:
         // Ignore generic in-page scroll jumps like #top, #main, #content
         const cleanUrlPath = url.pathname.replace(/\/+$/, '') || '/';
@@ -385,8 +410,8 @@
           return;
         }
 
-        // Avoid common file asset downloads (PDF, CSV, ZIP, PNG, etc.)
-        if (/\.(pdf|csv|zip|tar|gz|exe|dmg|png|jpg|jpeg|gif|svg)$/i.test(url.pathname)) {
+        // Avoid common file asset downloads (PDF, CSV, ZIP, CSS, JS, etc.)
+        if (/\.(pdf|csv|zip|tar|gz|exe|dmg|png|jpg|jpeg|gif|svg|css|js|ico|woff|woff2)$/i.test(url.pathname)) {
           return;
         }
 
@@ -519,13 +544,55 @@
 
   // Expose live diagnostic inspector for live testing
   window.__SCREEN_GRABBER_DIAGNOSE_LINKS__ = function() {
-    const { elements, shadowCount } = collectAllElementsDeep(document);
+    const { elements, shadowCount, iframeCount } = collectAllElementsDeep(document);
     const crawlerLinks = extractCrawlerLinks();
+
+    // Inspect navigation containers
+    const navCandidates = [];
+    elements.forEach(el => {
+      const tag = el.tagName.toLowerCase();
+      const role = el.getAttribute('role') || '';
+      const cls = (el.className && typeof el.className === 'string') ? el.className.toLowerCase() : '';
+      const id = el.id ? el.id.toLowerCase() : '';
+
+      const isNavContainer = tag === 'nav' || tag === 'aside' || role === 'navigation' || role === 'menubar' ||
+                            cls.includes('sidebar') || cls.includes('navbar') || cls.includes('side-nav') ||
+                            id.includes('sidebar') || id.includes('nav');
+
+      if (isNavContainer) {
+        const items = [];
+        const interactiveNodes = el.querySelectorAll('a, button, [role="button"], [role="menuitem"], [role="tab"], li, div[class*="item"]');
+        interactiveNodes.forEach(item => {
+          const text = cleanText(item.innerText || item.getAttribute('aria-label') || item.title);
+          if (text && text.length < 50) {
+            const attrs = {};
+            for (let i = 0; i < item.attributes.length; i++) {
+              attrs[item.attributes[i].name] = item.attributes[i].value;
+            }
+            items.push({
+              tag: item.tagName.toLowerCase(),
+              text,
+              attrs
+            });
+          }
+        });
+
+        navCandidates.push({
+          container: `${tag}${id ? '#' + id : ''}${cls ? '.' + cls.split(' ')[0] : ''}`,
+          itemsCount: items.length,
+          sampleItems: items.slice(0, 10)
+        });
+      }
+    });
+
     return {
       url: window.location.href,
       hostname: window.location.hostname,
       totalElements: elements.length,
       shadowRootsCount: shadowCount,
+      iframesCount: iframeCount,
+      navContainersCount: navCandidates.length,
+      navContainers: navCandidates.slice(0, 5),
       crawlerLinksCount: crawlerLinks.length,
       crawlerLinks: crawlerLinks
     };
