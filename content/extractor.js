@@ -311,7 +311,27 @@
   }
 
   /**
-   * Extract discoverable internal links for crawler
+   * Generates a stable CSS selector for an element
+   */
+  function buildElementSelector(el) {
+    if (el.getAttribute('aria-label')) {
+      return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
+    }
+    if (el.id) {
+      return `#${el.id}`;
+    }
+    if (el.getAttribute('data-qa')) {
+      return `[data-qa="${el.getAttribute('data-qa')}"]`;
+    }
+    if (el.getAttribute('data-bob-qa')) {
+      return `[data-bob-qa="${el.getAttribute('data-bob-qa')}"]`;
+    }
+    const cls = (el.className && typeof el.className === 'string') ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+    return `${el.tagName.toLowerCase()}${cls}`;
+  }
+
+  /**
+   * Extract discoverable internal links and primary navigation buttons for crawler
    */
   function extractCrawlerLinks() {
     const currentHostname = window.location.hostname;
@@ -322,10 +342,9 @@
     const links = [];
     const destructiveKeywords = ['delete', 'remove', 'logout', 'log out', 'sign out', 'disconnect', 'cancel subscription', 'terminate'];
 
-    // Traverse all DOM elements including inside Shadow Roots & iframes
+    // 1. Discover standard URL routes across all DOM nodes (including Shadow Roots)
     const { elements } = collectAllElementsDeep(document);
 
-    // List of attributes commonly holding router destinations
     const ROUTE_ATTRIBUTES = [
       'href',
       'ng-reflect-router-link',
@@ -343,7 +362,6 @@
 
     elements.forEach(el => {
       try {
-        // Never treat stylesheets, scripts, or meta tags as links
         if (el.tagName === 'LINK' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'META') {
           return;
         }
@@ -360,7 +378,6 @@
           }
         }
 
-        // If no explicit route attribute, check if element is a menuitem or nav item with a route in any attribute
         if (!rawDest) {
           const role = el.getAttribute('role');
           const isNavItem = role === 'menuitem' || role === 'tab' || role === 'link' || el.tagName === 'A';
@@ -382,18 +399,13 @@
 
         const url = new URL(rawDest, window.location.href);
 
-        // Enforce same domain or product subdomain
         if (!isSameOrSubdomain(url.hostname, currentHostname)) return;
 
-        // Skip exact duplicate of the current page
         const cleanUrlHref = url.href.replace(/\/+$/, '');
         if (cleanUrlHref === currentHref) return;
 
-        // Skip root if already on root
         if (url.pathname === '/' && currentPath === '/' && !url.hash && !currentHash) return;
 
-        // Handle same pathname with hash:
-        // Ignore generic in-page scroll jumps like #top, #main, #content
         const cleanUrlPath = url.pathname.replace(/\/+$/, '') || '/';
         if (cleanUrlPath === currentPath) {
           if (!url.hash || url.hash === '#' || url.hash === '#top' || url.hash === '#main' || url.hash === '#content' || url.hash === currentHash) {
@@ -405,17 +417,17 @@
         const lowerLabel = label.toLowerCase();
         const lowerPath = url.pathname.toLowerCase();
 
-        // Skip destructive actions
         if (destructiveKeywords.some(kw => lowerLabel.includes(kw) || lowerPath.includes(kw))) {
           return;
         }
 
-        // Avoid common file asset downloads (PDF, CSV, ZIP, CSS, JS, etc.)
         if (/\.(pdf|csv|zip|tar|gz|exe|dmg|png|jpg|jpeg|gif|svg|css|js|ico|woff|woff2)$/i.test(url.pathname)) {
           return;
         }
 
         links.push({
+          type: 'url',
+          targetKey: `url::${url.href.replace(/\/+$/, '')}`,
           url: url.href,
           pathname: url.pathname + url.search + url.hash,
           label: label || url.pathname
@@ -423,12 +435,43 @@
       } catch (_) {}
     });
 
-    // Deduplicate by normalized URL
+    // 2. Discover primary navigation buttons in <nav>, <aside>, or sidebar containers
+    // (Crucial for enterprise Angular/React apps like HiBob where main sections are <button> elements)
+    const navContainers = document.querySelectorAll('nav, [role="navigation"], .navigation, .sidebar, aside');
+    navContainers.forEach(container => {
+      const candidates = container.querySelectorAll('button, [role="button"], [role="menuitem"], [role="tab"]');
+      candidates.forEach(btn => {
+        try {
+          const ariaLabel = btn.getAttribute('aria-label') || '';
+          const label = cleanText(ariaLabel || btn.innerText || btn.title);
+          if (!label || label.length > 40) return;
+
+          const lower = label.toLowerCase();
+          // Skip destructive actions or home if already on home
+          if (destructiveKeywords.some(kw => lower.includes(kw))) return;
+          if (lower === 'home' && currentPath === '/') return;
+
+          const selector = buildElementSelector(btn);
+          const targetKey = `click::${lower.replace(/\s+/g, '_')}`;
+
+          links.push({
+            type: 'click',
+            targetKey,
+            label,
+            ariaLabel,
+            selector,
+            url: null,
+            pathname: `#action:${lower.replace(/\s+/g, '_')}`
+          });
+        } catch (_) {}
+      });
+    });
+
+    // Deduplicate by targetKey
     const uniqueMap = new Map();
     links.forEach(l => {
-      const key = l.url.replace(/\/+$/, '');
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, l);
+      if (!uniqueMap.has(l.targetKey)) {
+        uniqueMap.set(l.targetKey, l);
       }
     });
 
@@ -596,6 +639,40 @@
       crawlerLinksCount: crawlerLinks.length,
       crawlerLinks: crawlerLinks
     };
+  };
+
+  // Expose trigger method to execute click navigation on button-based menu items
+  window.__SCREEN_GRABBER_TRIGGER_NAV_ACTION__ = function(actionData) {
+    const { selector, label, ariaLabel } = actionData || {};
+    let target = null;
+
+    if (ariaLabel) {
+      target = document.querySelector(`nav [aria-label="${ariaLabel}"], [role="navigation"] [aria-label="${ariaLabel}"], [aria-label="${ariaLabel}"]`);
+    }
+
+    if (!target && selector) {
+      try {
+        target = document.querySelector(selector);
+      } catch (_) {}
+    }
+
+    if (!target && label) {
+      const candidates = document.querySelectorAll('nav button, [role="navigation"] button, aside button, nav a, [role="menuitem"], [role="tab"]');
+      target = Array.from(candidates).find(c => {
+        const text = cleanText(c.getAttribute('aria-label') || c.innerText || c.title || '');
+        return text.toLowerCase() === label.toLowerCase();
+      });
+    }
+
+    if (target) {
+      try { target.scrollIntoView({ block: 'nearest' }); } catch (_) {}
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      target.click();
+      return { success: true, clicked: true, text: target.innerText || target.getAttribute('aria-label') };
+    }
+
+    return { success: false, error: `Navigation target not found: ${label || selector}` };
   };
 
   // Expose explicit cleanup method

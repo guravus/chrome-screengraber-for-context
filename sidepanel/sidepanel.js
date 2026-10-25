@@ -373,6 +373,7 @@ async function runAutoCrawl() {
 
     // Filter helper: domain boundary + optional path prefix
     const isAllowedTarget = (targetUrl) => {
+      if (!targetUrl) return true; // In-app navigation actions (e.g. Org, Time, Docs) are always allowed
       try {
         const u = new URL(targetUrl);
         if (allowSubdomains) {
@@ -418,55 +419,79 @@ async function runAutoCrawl() {
     // 3. Sequential crawling loop
     while (state.isCrawling && queue.length > 0 && state.manifest.steps.length < maxScreens) {
       const nextTarget = queue.shift();
-      const normTargetUrl = normalizeUrl(nextTarget.url);
+      const targetIdentifier = nextTarget.targetKey || (nextTarget.url ? normalizeUrl(nextTarget.url) : nextTarget.label);
 
-      if (state.visitedUrls.has(normTargetUrl)) {
-        addCrawlLog(`Skipping ${nextTarget.label || normTargetUrl} (already captured).`, 'info');
+      if (state.visitedUrls.has(targetIdentifier)) {
+        addCrawlLog(`Skipping ${nextTarget.label} (already captured).`, 'info');
         continue;
       }
 
       const screenNum = state.manifest.steps.length + 1;
       const progressMsg = `[Screen ${screenNum}/${maxScreens}] ${nextTarget.label}`;
       dom.crawlStatusText.textContent = `Navigating: ${nextTarget.label}... (${queue.length} left)`;
-      addCrawlLog(`Navigating to #${screenNum}: ${nextTarget.label || nextTarget.pathname}`, 'info');
       showToast(progressMsg);
 
-      // Navigate tab to target URL
-      const navRes = await chrome.runtime.sendMessage({
-        type: 'NAVIGATE_TAB',
-        tabId: initialTab.id,
-        url: nextTarget.url
-      });
+      if (nextTarget.type === 'click') {
+        // Execute click on primary navigation button
+        addCrawlLog(`Opening menu action #${screenNum}: ${nextTarget.label}`, 'info');
+        await chrome.scripting.executeScript({
+          target: { tabId: initialTab.id },
+          files: ['content/extractor.js']
+        });
 
-      // Allow dynamic renders & hydration to settle
-      await new Promise(r => setTimeout(r, (delaySec * 1000) + 700));
+        await chrome.scripting.executeScript({
+          target: { tabId: initialTab.id },
+          func: (actionData) => {
+            if (typeof window.__SCREEN_GRABBER_TRIGGER_NAV_ACTION__ === 'function') {
+              return window.__SCREEN_GRABBER_TRIGGER_NAV_ACTION__(actionData);
+            }
+          },
+          args: [{ selector: nextTarget.selector, label: nextTarget.label, ariaLabel: nextTarget.ariaLabel }]
+        });
+      } else {
+        // Navigate tab to target URL
+        addCrawlLog(`Navigating to #${screenNum}: ${nextTarget.label || nextTarget.pathname}`, 'info');
+        await chrome.runtime.sendMessage({
+          type: 'NAVIGATE_TAB',
+          tabId: initialTab.id,
+          url: nextTarget.url
+        });
+      }
 
-      // Capture newly loaded screen
+      // Allow dynamic renders, flyouts & hydration to settle
+      await new Promise(r => setTimeout(r, (delaySec * 1000) + 800));
+
+      // Capture newly loaded/revealed screen
       const captureRes = await performCapture(slugify(nextTarget.label), initialTab.id);
-      if (captureRes.success && captureRes.contextData) {
-        addCrawlLog(`Screen #${screenNum} captured successfully.`, 'success');
+      state.visitedUrls.add(targetIdentifier);
 
-        // Enqueue newly discovered links on this new page
+      if (captureRes.success && captureRes.contextData) {
+        addCrawlLog(`Screen #${screenNum} (${nextTarget.label}) captured successfully.`, 'success');
+
+        // Enqueue newly discovered links on this new page or flyout
         const newDiscovered = (captureRes.contextData.crawlerLinks || [])
-          .filter(l => !state.visitedUrls.has(normalizeUrl(l.url)))
+          .filter(l => {
+            const key = l.targetKey || (l.url ? normalizeUrl(l.url) : l.label);
+            return !state.visitedUrls.has(key);
+          })
           .filter(l => isAllowedTarget(l.url));
 
         let addedCount = 0;
         newDiscovered.forEach(newLink => {
-          const norm = normalizeUrl(newLink.url);
-          if (!queue.some(q => normalizeUrl(q.url) === norm)) {
+          const key = newLink.targetKey || (newLink.url ? normalizeUrl(newLink.url) : newLink.label);
+          if (!queue.some(q => (q.targetKey || (q.url ? normalizeUrl(q.url) : q.label)) === key)) {
             queue.push(newLink);
             addedCount++;
           }
         });
 
         if (addedCount > 0) {
-          addCrawlLog(`Found ${addedCount} new unvisited links on this screen. (Queue: ${queue.length})`, 'info');
+          addCrawlLog(`Found ${addedCount} new views/links on this screen. (Queue: ${queue.length})`, 'info');
         }
 
         dom.crawlStatusText.textContent = `Saved ${state.manifest.steps.length} screens. (${queue.length} in queue)`;
       } else {
-        addCrawlLog(`Failed capturing ${nextTarget.url}: ${captureRes.error}`, 'error');
+        addCrawlLog(`Failed capturing ${nextTarget.label}: ${captureRes.error}`, 'error');
       }
     }
 
@@ -522,7 +547,8 @@ if (dom.btnInspectPage) {
 
       if (diag.crawlerLinksCount > 0) {
         diag.crawlerLinks.slice(0, 15).forEach((link, idx) => {
-          addCrawlLog(`  ${idx + 1}. [${link.label}] -> ${link.pathname}`, 'info');
+          const typeTag = link.type === 'click' ? '🔘 Nav Button' : '🔗 URL';
+          addCrawlLog(`  ${idx + 1}. ${typeTag} "${link.label}" -> ${link.pathname}`, 'info');
         });
         if (diag.crawlerLinksCount > 15) {
           addCrawlLog(`  ...and ${diag.crawlerLinksCount - 15} more links`, 'info');
