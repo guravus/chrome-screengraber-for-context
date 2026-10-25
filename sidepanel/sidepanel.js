@@ -35,7 +35,9 @@ const dom = {
   btnStopCrawl: document.getElementById('btn-stop-crawl'),
   crawlMaxScreens: document.getElementById('crawl-max-screens'),
   crawlDelay: document.getElementById('crawl-delay'),
-  crawlStayPrefix: document.getElementById('crawl-stay-prefix'),
+  crawlPathPrefix: document.getElementById('crawl-path-prefix'),
+  crawlStatusBox: document.getElementById('crawl-status-box'),
+  crawlStatusText: document.getElementById('crawl-status-text'),
   settingScale: document.getElementById('setting-scale'),
   settingFormat: document.getElementById('setting-format'),
   settingFullPage: document.getElementById('setting-full-page'),
@@ -158,21 +160,38 @@ dom.tabBtns.forEach(btn => {
 });
 
 /**
+ * Normalize URLs for visited set and deduplication
+ */
+function normalizeUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const cleanPath = u.pathname.replace(/\/+$/, '') || '/';
+    return `${u.origin}${cleanPath}${u.search}${u.hash}`;
+  } catch (_) {
+    return rawUrl;
+  }
+}
+
+/**
  * Capture current active tab screen & extract context
  */
-async function performCapture(customSlug = null) {
+async function performCapture(customSlug = null, explicitTabId = null) {
   setBusy(true, 'Capturing...');
 
   try {
-    // 1. Get active tab
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.id) {
-      throw new Error('No active browser tab found.');
+    // 1. Get target tab
+    let tabId = explicitTabId;
+    if (!tabId) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) {
+        throw new Error('No active browser tab found.');
+      }
+      tabId = tab.id;
     }
 
     // 2. Inject context extractor script
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId },
       files: ['content/extractor.js']
     });
 
@@ -180,7 +199,7 @@ async function performCapture(customSlug = null) {
 
     // 3. Extract DOM metadata and apply visual blur if requested
     const [execResult] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId },
       func: (redact) => window.__SCREEN_GRABBER_EXTRACT__({ redactPII: redact }),
       args: [redactPII]
     });
@@ -198,14 +217,14 @@ async function performCapture(customSlug = null) {
     try {
       shotResponse = await chrome.runtime.sendMessage({
         type: 'CAPTURE_SCREEN',
-        tabId: tab.id,
+        tabId,
         options: captureOptions
       });
     } finally {
       // Immediately restore DOM visuals so the user's active page is untouched
       if (redactPII) {
         await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
+          target: { tabId },
           func: () => {
             if (typeof window.__SCREEN_GRABBER_RESTORE_VISUALS__ === 'function') {
               window.__SCREEN_GRABBER_RESTORE_VISUALS__();
@@ -247,7 +266,7 @@ async function performCapture(customSlug = null) {
     };
 
     state.manifest.steps.push(stepRecord);
-    state.visitedUrls.add(contextData.metadata.url);
+    state.visitedUrls.add(normalizeUrl(contextData.metadata.url));
 
     // 7. Stream and persist directly to disk
     const sessionSummary = generateSessionSummary();
@@ -311,63 +330,102 @@ async function runAutoCrawl() {
   dom.btnStopCrawl.disabled = false;
   dom.connectionStatus.textContent = 'Crawling...';
   dom.connectionStatus.classList.add('busy');
+  dom.crawlStatusBox.classList.add('active');
 
   const maxScreens = parseInt(dom.crawlMaxScreens.value, 10) || 15;
   const delaySec = parseInt(dom.crawlDelay.value, 10) || 2;
-  const stayPrefix = dom.crawlStayPrefix.checked;
+  const customPrefix = (dom.crawlPathPrefix.value || '').trim();
 
   try {
     const [initialTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!initialTab) throw new Error('No active tab.');
+    if (!initialTab || !initialTab.id) throw new Error('No active browser tab found to crawl.');
 
     const initialUrl = new URL(initialTab.url);
-    const prefix = stayPrefix ? initialUrl.pathname : '/';
 
-    // First capture: capture current screen
-    const firstResult = await performCapture();
-    if (!firstResult.success) return;
+    // Filter helper: domain boundary + optional path prefix
+    const isAllowedTarget = (targetUrl) => {
+      try {
+        const u = new URL(targetUrl);
+        if (u.origin !== initialUrl.origin) return false;
+        if (customPrefix && !u.pathname.startsWith(customPrefix)) return false;
+        return true;
+      } catch (_) {
+        return false;
+      }
+    };
 
-    // Seed queue with safe internal links from the first screen
-    let queue = (firstResult.contextData.crawlerLinks || [])
-      .filter(l => !state.visitedUrls.has(l.url))
-      .filter(l => !stayPrefix || new URL(l.url).pathname.startsWith(prefix));
+    dom.crawlStatusText.textContent = 'Capturing starting screen...';
 
+    // 1. Capture current starting screen
+    const firstResult = await performCapture(null, initialTab.id);
+    if (!firstResult.success) {
+      throw new Error(firstResult.error || 'Failed to capture starting screen.');
+    }
+
+    // 2. Discover and queue internal links
+    const rawLinks = firstResult.contextData.crawlerLinks || [];
+    let queue = rawLinks
+      .filter(l => !state.visitedUrls.has(normalizeUrl(l.url)))
+      .filter(l => isAllowedTarget(l.url));
+
+    console.log(`[ScreenGrabber] Starting screen has ${rawLinks.length} links; ${queue.length} match domain criteria.`);
+    dom.crawlStatusText.textContent = `Found ${queue.length} links queued. Crawling...`;
+
+    // 3. Sequential crawling loop
     while (state.isCrawling && queue.length > 0 && state.manifest.steps.length < maxScreens) {
       const nextTarget = queue.shift();
-      if (!nextTarget || state.visitedUrls.has(nextTarget.url)) continue;
+      const normTargetUrl = normalizeUrl(nextTarget.url);
 
-      showToast(`Navigating to: ${nextTarget.label}...`);
+      if (state.visitedUrls.has(normTargetUrl)) continue;
 
-      // Navigate tab
-      await chrome.runtime.sendMessage({
+      const progressMsg = `[Screen ${state.manifest.steps.length + 1}/${maxScreens}] ${nextTarget.label}`;
+      dom.crawlStatusText.textContent = `Navigating: ${nextTarget.label}... (${queue.length} left)`;
+      showToast(progressMsg);
+
+      // Navigate tab to target URL
+      const navRes = await chrome.runtime.sendMessage({
         type: 'NAVIGATE_TAB',
         tabId: initialTab.id,
         url: nextTarget.url
       });
 
-      // Wait for page load and delay
-      await new Promise(r => setTimeout(r, (delaySec * 1000) + 1000));
+      // Allow SPA transitions and dynamic renders to settle
+      await new Promise(r => setTimeout(r, (delaySec * 1000) + 700));
 
-      // Capture screen
-      const captureRes = await performCapture(slugify(nextTarget.label));
+      // Capture newly loaded screen
+      const captureRes = await performCapture(slugify(nextTarget.label), initialTab.id);
       if (captureRes.success && captureRes.contextData) {
-        // Enqueue newly discovered links
-        const newLinks = (captureRes.contextData.crawlerLinks || [])
-          .filter(l => !state.visitedUrls.has(l.url))
-          .filter(l => !stayPrefix || new URL(l.url).pathname.startsWith(prefix));
+        // Enqueue newly discovered links on this new page
+        const newDiscovered = (captureRes.contextData.crawlerLinks || [])
+          .filter(l => !state.visitedUrls.has(normalizeUrl(l.url)))
+          .filter(l => isAllowedTarget(l.url));
 
-        queue.push(...newLinks);
+        // Deduplicate against existing queue
+        newDiscovered.forEach(newLink => {
+          const norm = normalizeUrl(newLink.url);
+          if (!queue.some(q => normalizeUrl(q.url) === norm)) {
+            queue.push(newLink);
+          }
+        });
+
+        dom.crawlStatusText.textContent = `Saved ${state.manifest.steps.length} screens. (${queue.length} in queue)`;
+      } else {
+        console.warn(`[ScreenGrabber] Could not capture ${nextTarget.url}:`, captureRes.error);
       }
     }
 
-    showToast(`Crawl finished. Captured ${state.manifest.steps.length} screens.`);
+    const finalCount = state.manifest.steps.length;
+    dom.crawlStatusText.textContent = `Crawl complete. Captured ${finalCount} screens.`;
+    showToast(`Crawl finished: ${finalCount} screens captured.`);
   } catch (err) {
     console.error('Crawl Error:', err);
-    showToast(`Crawl stopped: ${err.message}`);
+    dom.crawlStatusText.textContent = `Crawl halted: ${err.message}`;
+    showToast(`Crawl error: ${err.message}`);
   } finally {
     state.isCrawling = false;
     dom.btnStartCrawl.disabled = false;
     dom.btnStopCrawl.disabled = true;
+    dom.crawlStatusBox.classList.remove('active');
     setBusy(false);
   }
 }

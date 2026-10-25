@@ -219,36 +219,68 @@
    */
   function extractCrawlerLinks() {
     const currentOrigin = window.location.origin;
-    const links = [];
-    const anchors = document.querySelectorAll('a[href]');
+    const currentHref = window.location.href.replace(/\/+$/, '');
+    const currentPath = window.location.pathname.replace(/\/+$/, '') || '/';
+    const currentHash = window.location.hash;
 
+    const links = [];
     const destructiveKeywords = ['delete', 'remove', 'logout', 'log out', 'sign out', 'disconnect', 'cancel subscription', 'terminate'];
 
-    anchors.forEach(a => {
-      if (!isVisible(a)) return;
+    // Select standard anchors and interactive elements with route attributes
+    const elements = document.querySelectorAll('a[href], [data-href], [data-route], [data-url], [role="link"]');
+
+    elements.forEach(el => {
+      if (!isVisible(el)) return;
       try {
-        const url = new URL(a.href, window.location.href);
+        let rawHref = el.getAttribute('href') || el.getAttribute('data-href') || el.getAttribute('data-route') || el.getAttribute('data-url');
+        if (!rawHref || rawHref === '#' || rawHref.startsWith('javascript:')) return;
+
+        const url = new URL(rawHref, window.location.href);
+
+        // Enforce same origin (stay within the current domain)
         if (url.origin !== currentOrigin) return;
-        if (url.pathname === window.location.pathname && url.search === window.location.search && url.hash) return;
-        
-        const label = cleanText(a.innerText || a.getAttribute('aria-label') || a.title);
+
+        // Skip exact duplicate of the current page
+        const cleanUrlHref = url.href.replace(/\/+$/, '');
+        if (cleanUrlHref === currentHref) return;
+
+        // Handle same pathname with hash:
+        // Ignore generic in-page scroll jumps like #top, #main, #content
+        const cleanUrlPath = url.pathname.replace(/\/+$/, '') || '/';
+        if (cleanUrlPath === currentPath) {
+          if (!url.hash || url.hash === '#' || url.hash === '#top' || url.hash === '#main' || url.hash === '#content' || url.hash === currentHash) {
+            return;
+          }
+        }
+
+        const label = cleanText(el.innerText || el.getAttribute('aria-label') || el.title);
         const lowerLabel = label.toLowerCase();
-        if (destructiveKeywords.some(kw => lowerLabel.includes(kw) || url.pathname.toLowerCase().includes(kw))) {
+        const lowerPath = url.pathname.toLowerCase();
+
+        // Skip destructive actions
+        if (destructiveKeywords.some(kw => lowerLabel.includes(kw) || lowerPath.includes(kw))) {
+          return;
+        }
+
+        // Avoid common file asset downloads (PDF, CSV, ZIP, PNG, etc.)
+        if (/\.(pdf|csv|zip|tar|gz|exe|dmg|png|jpg|jpeg|gif|svg)$/i.test(url.pathname)) {
           return;
         }
 
         links.push({
           url: url.href,
-          pathname: url.pathname + url.search,
+          pathname: url.pathname + url.search + url.hash,
           label: label || url.pathname
         });
       } catch (_) {}
     });
 
+    // Deduplicate by normalized URL
     const uniqueMap = new Map();
     links.forEach(l => {
-      if (!uniqueMap.has(l.url)) {
-        uniqueMap.set(l.url, l);
+      const key = l.url.replace(/\/+$/, '');
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, l);
       }
     });
 

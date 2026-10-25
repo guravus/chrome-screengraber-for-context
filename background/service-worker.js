@@ -129,9 +129,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'NAVIGATE_TAB') {
-    chrome.tabs.update(message.tabId, { url: message.url }).then((tab) => {
-      sendResponse({ success: true, tab });
-    }).catch(err => sendResponse({ success: false, error: err.message }));
+    const tabId = message.tabId;
+    let responded = false;
+
+    const cleanup = () => {
+      chrome.tabs.onUpdated.removeListener(updateListener);
+    };
+
+    const finish = (res) => {
+      if (responded) return;
+      responded = true;
+      cleanup();
+      sendResponse(res);
+    };
+
+    const updateListener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        finish({ success: true, status: 'complete' });
+      }
+    };
+
+    chrome.tabs.onUpdated.addListener(updateListener);
+
+    // Timeout safety fallback (e.g. SPAs that do not trigger full page reload)
+    setTimeout(() => {
+      finish({ success: true, status: 'timeout' });
+    }, 6000);
+
+    chrome.tabs.update(tabId, { url: message.url }).catch((err) => {
+      finish({ success: false, error: err.message });
+    });
+
     return true;
   }
 });

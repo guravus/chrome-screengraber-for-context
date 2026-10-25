@@ -89,11 +89,14 @@
           </div>
         </div>
 
-        <div class="checkbox-group">
-          <label>
-            <input type="checkbox" id="crawl-stay-prefix" checked>
-            <span>Stay within current path prefix</span>
-          </label>
+        <div class="input-group">
+          <label for="crawl-path-prefix">Path Prefix Filter (Optional)</label>
+          <input type="text" id="crawl-path-prefix" placeholder="e.g. /app (leave blank to crawl entire product)">
+        </div>
+
+        <div class="crawl-status-box" id="crawl-status-box">
+          <span class="crawl-status-indicator" id="crawl-status-indicator"></span>
+          <span class="crawl-status-text" id="crawl-status-text">Ready to crawl current domain</span>
         </div>
 
         <div class="crawl-btn-row">
